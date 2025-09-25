@@ -7,6 +7,7 @@ This document outlines the branching model and rules for our development process
 *   **`main`**: This is the production branch. Its history consists only of versioned releases. It is always stable.
 *   **`develop`**: This is the main integration branch for all new features. It enters a **locked** state (code freeze) during release or hotfix procedures to ensure stability.
 *   **Versioning**: All version tags on `main` **must** follow **Semantic Versioning (SemVer)** in the format `MAJOR.MINOR.PATCH`.
+*   **Changelog**: This repository requires a `CHANGELOG.md` file following the [Keep a Changelog](https://keepachangelog.com/) format.
 
 ---
 
