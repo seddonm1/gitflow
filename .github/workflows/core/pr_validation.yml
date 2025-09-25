@@ -1,0 +1,170 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check_develop_lock:
+    name: Check Develop Branch Lock Status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for active release/hotfix branches
+        id: check_lock
+        run: |
+          echo "Checking for active release or hotfix branches..."
+
+          # Look for remote release/hotfix branches
+          RELEASE_BRANCHES=$(git branch -r | grep "origin/release/" | wc -l)
+          HOTFIX_BRANCHES=$(git branch -r | grep "origin/hotfix/" | wc -l)
+
+          echo "Found $RELEASE_BRANCHES release branches"
+          echo "Found $HOTFIX_BRANCHES hotfix branches"
+
+          if [ "$RELEASE_BRANCHES" -gt 0 ] || [ "$HOTFIX_BRANCHES" -gt 0 ]; then
+            echo "is_locked=true" >> $GITHUB_OUTPUT
+
+            # List the active branches
+            echo "Active branches:"
+            git branch -r | grep -E "origin/(release|hotfix)/" | sed 's/origin\///' | while read branch; do
+              echo "  - $branch"
+            done
+          else
+            echo "is_locked=false" >> $GITHUB_OUTPUT
+            echo "🟢 No active release/hotfix branches found"
+          fi
+
+      - name: Block PR if develop is locked
+        if: steps.check_lock.outputs.is_locked == 'true'
+        run: |
+          # Get the list of blocking branches
+          BLOCKING_BRANCHES=$(git branch -r | grep -E "origin/(release|hotfix)/" | sed 's/origin\///' | tr '\n' ', ' | sed 's/,$//')
+
+          echo "🔴 Develop branch is locked!"
+          echo ""
+          echo "The develop branch is currently locked due to active release/hotfix branches:"
+          echo "$BLOCKING_BRANCHES"
+          echo ""
+          echo "This PR cannot be merged until the release/hotfix process is complete."
+          echo "The develop branch will be automatically unlocked when the release/hotfix"
+          echo "is merged to main and back-merged to develop."
+          echo ""
+          echo "Please wait for the release/hotfix to complete before merging this PR."
+
+          # Create a comment on the PR
+          gh pr comment ${{ github.event.pull_request.number }} --body "## 🔒 Develop Branch Locked
+
+          The develop branch is currently **locked** due to an active release/hotfix process.
+
+          **Blocking branches:** $BLOCKING_BRANCHES
+
+          ### What this means:
+          - This PR cannot be merged until the release/hotfix is complete
+          - The develop branch will be automatically unlocked when the release/hotfix is merged to main
+          - No action is required from you - just wait for the process to complete
+
+          ### When will this be unlocked?
+          The develop branch will be unlocked automatically when:
+          1. The release/hotfix PR is merged to \`main\`
+          2. The changes are back-merged to \`develop\`
+
+          You can monitor the progress of active releases/hotfixes in the repository's Pull Requests tab."
+
+          # Exit with failure to block the PR
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate PR is from feature branch
+        if: steps.check_lock.outputs.is_locked == 'false'
+        run: |
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          echo "Source branch: $SOURCE_BRANCH"
+
+          if [[ ! "$SOURCE_BRANCH" =~ ^feature/ ]]; then
+            echo "🔴 PRs to develop must be from feature branches (feature/*)"
+            echo "Current branch: $SOURCE_BRANCH"
+
+            gh pr comment ${{ github.event.pull_request.number }} --body "## 🔴 Invalid Branch Name
+
+          PRs to the \`develop\` branch must be from \`feature/*\` branches.
+
+          **Current branch:** \`$SOURCE_BRANCH\`
+          **Expected pattern:** \`feature/your-feature-name\`
+
+          Please rename your branch to follow the gitflow convention:
+          \`\`\`bash
+          git branch -m $SOURCE_BRANCH feature/your-feature-name
+          git push origin -u feature/your-feature-name
+          git push origin --delete $SOURCE_BRANCH
+          \`\`\`"
+
+            exit 1
+          fi
+
+          echo "🟢 Branch name follows gitflow convention"
+
+      - name: Verify changelog exists
+        if: steps.check_lock.outputs.is_locked == 'false'
+        run: |
+          if [ -f "CHANGELOG.md" ]; then
+            echo "🟢 CHANGELOG.md found"
+          else
+            echo "🔴 CHANGELOG.md not found"
+            echo "A CHANGELOG.md file is required for this gitflow implementation"
+
+            gh pr comment ${{ github.event.pull_request.number }} --body "## 🔴 Missing CHANGELOG.md
+
+          This repository requires a \`CHANGELOG.md\` file following the [Keep a Changelog](https://keepachangelog.com/) format.
+
+          **Why this is required:**
+          - Release notes are automatically generated from the changelog
+          - Ensures consistent documentation of changes
+          - Required for the gitflow automation to work properly
+
+          **How to fix:**
+          1. Create a \`CHANGELOG.md\` file in the repository root
+          2. Follow the [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format
+          3. Add an \`[Unreleased]\` section for ongoing changes
+
+          **Example format:**
+          \`\`\`markdown
+          # Changelog
+
+          ## [Unreleased]
+
+          ### Added
+          - Your feature changes here
+
+          ### Changed
+          - Your modifications here
+
+          ### Fixed
+          - Your bug fixes here
+          \`\`\`"
+
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Success - PR can proceed
+        if: steps.check_lock.outputs.is_locked == 'false'
+        run: |
+          echo "🟢 Develop branch is unlocked and PR follows gitflow conventions"
+          echo "This PR can proceed with the normal review process"
+
+  run_ci:
+    name: Run CI Tests
+    needs: check_develop_lock
+    if: needs.check_develop_lock.result == 'success'
+    uses: ./.github/workflows/user/develop_ci.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}

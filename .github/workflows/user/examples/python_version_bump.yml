@@ -1,0 +1,84 @@
+# Python Version Bump Example
+# Copy to ../version_bump.yml and customize for your project
+
+name: Version Bump (Python)
+
+on:
+  workflow_call:
+    inputs:
+      bump_type:
+        description: "Type of version bump (major, minor, patch)"
+        required: true
+        type: string
+    outputs:
+      new_version:
+        description: "The new version number (e.g., 1.2.3)"
+        value: ${{ jobs.bump.outputs.new_version }}
+
+jobs:
+  bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Update changelog
+        id: changelog
+        uses: release-flow/keep-a-changelog-action@v2
+        with:
+          command: bump
+          version: ${{ inputs.bump_type }}
+          keep-unreleased-section: true
+          fail-on-empty-release-notes: true
+
+      - name: Bump version using uv
+        id: version
+        run: |
+          # Use uv version command for simple version bumping
+          NEW_VERSION=$(uv version --bump ${{ inputs.bump_type }} --short)
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Version bumped to $NEW_VERSION"
+
+      - name: Verify versions match
+        run: |
+          CHANGELOG_VERSION="${{ steps.changelog.outputs.version }}"
+          PROJECT_VERSION="${{ steps.version.outputs.new_version }}"
+
+          echo "Changelog version: $CHANGELOG_VERSION"
+          echo "Project version: $PROJECT_VERSION"
+
+          if [ "$CHANGELOG_VERSION" = "$PROJECT_VERSION" ]; then
+            echo "🟢 Versions match - all good!"
+          else
+            echo "🔴 Version mismatch!"
+            echo "Changelog version: $CHANGELOG_VERSION"
+            echo "Project version: $PROJECT_VERSION"
+            echo ""
+            echo "This usually means:"
+            echo "1. The changelog and project files are out of sync"
+            echo "2. The unreleased section doesn't match the expected bump type"
+            echo "3. Manual intervention needed to align versions"
+            exit 1
+          fi
+
+      - name: Commit version bump
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+          git commit -m "Bump version to $NEW_VERSION"

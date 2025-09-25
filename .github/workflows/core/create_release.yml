@@ -1,0 +1,104 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type"
+        required: true
+        default: "minor"
+        type: choice
+        options:
+          - major
+          - minor
+
+jobs:
+  validate:
+    name: Validate Release Conditions
+    runs-on: ubuntu-latest
+    outputs:
+      can_proceed: ${{ steps.check.outputs.can_proceed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check branch and conditions
+        id: check
+        run: |
+          # Must be run from develop branch
+          if [ "${{ github.ref_name }}" != "develop" ]; then
+            echo "🔴 Release must be created from develop branch"
+            echo "can_proceed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Check if there are existing release/hotfix branches
+          if git branch -r | grep -E "origin/(release|hotfix)/" | head -1; then
+            echo "🔴 Release or hotfix already in progress"
+            echo "can_proceed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "🟢 Release conditions validated"
+          echo "can_proceed=true" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  version_bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.can_proceed == 'true'
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      release_branch: ${{ steps.branch.outputs.branch_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Call project-specific version bump
+        id: bump
+        uses: ./.github/workflows/user/version_bump.yml
+        with:
+          bump_type: ${{ inputs.bump_type }}
+
+      - name: Create release branch
+        id: branch
+        run: |
+          BRANCH_NAME="release/${{ steps.bump.outputs.new_version }}"
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "🟢 Created release branch: $BRANCH_NAME"
+
+  create_pr:
+    name: Create Release PR
+    runs-on: ubuntu-latest
+    needs: [validate, version_bump]
+    if: needs.validate.outputs.can_proceed == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Pull Request
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ needs.version_bump.outputs.release_branch }}" \
+            --title "Release v${{ needs.version_bump.outputs.new_version }}" \
+            --body "$(cat <<'EOF'
+          ## Release v${{ needs.version_bump.outputs.new_version }}
+
+          This is an automated release PR created from the develop branch.
+
+          **Note**: The develop branch is currently locked. It will be unlocked automatically when this PR is closed or merged to main.
+          EOF
+          )"
+
+          echo "🟢 Release PR created for v${{ needs.version_bump.outputs.new_version }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

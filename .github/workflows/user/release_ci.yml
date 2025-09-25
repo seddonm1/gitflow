@@ -1,0 +1,71 @@
+# Release CI workflow that extends develop CI with release-specific checks
+# This runs when release PRs are opened to main
+
+name: Release CI
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "Pull request number"
+        required: true
+        type: number
+      head_sha:
+        description: "Head commit SHA"
+        required: true
+        type: string
+      version:
+        description: "Release version (e.g., 1.2.3)"
+        required: true
+        type: string
+
+jobs:
+  # First run all the standard develop CI checks
+  develop_ci:
+    name: Run Standard CI
+    uses: ./.github/workflows/user/develop_ci.yml
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      head_sha: ${{ inputs.head_sha }}
+
+  # Release build verification
+  release_build:
+    name: Release Build
+    runs-on: ubuntu-latest
+    needs: develop_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+
+      # Production build verification
+      - name: Production build
+        run: |
+          # TODO: Add production build steps
+          # Examples:
+
+          # Python (build wheel/sdist):
+          # pip install build
+          # python -m build
+
+          # Node.js (production build):
+          # npm ci
+          # npm run build:prod
+
+          # Rust (release build):
+          # cargo build --release
+
+          echo "🔴 ADD PRODUCTION BUILD FOR YOUR PROJECT"
+          echo "This should verify the release can be built for production"
+
+      # Docker build (if applicable)
+      - name: Docker build test
+        run: |
+          if [ -f "Dockerfile" ]; then
+            echo "Building Docker image for release verification..."
+            docker build -t release-test:${{ inputs.version }} .
+            echo "🟢 Docker build successful"
+          else
+            echo "ℹ️  No Dockerfile found - skipping Docker build"
+          fi

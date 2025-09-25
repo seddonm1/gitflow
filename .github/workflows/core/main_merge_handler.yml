@@ -1,0 +1,168 @@
+name: Main Branch Merge Handler
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+jobs:
+  handle_merge:
+    name: Handle Main Branch Merge
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine source branch type
+        id: branch_info
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Direct push to main - get the commit info
+            SOURCE_BRANCH=$(git log --format="%s" -n 1 | grep -oE "(release|hotfix)/[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
+          else
+            # Pull request merge
+            SOURCE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          fi
+
+          echo "Source branch: $SOURCE_BRANCH"
+
+          if [[ "$SOURCE_BRANCH" =~ ^release/ ]]; then
+            echo "branch_type=release" >> $GITHUB_OUTPUT
+            echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
+            VERSION=$(echo "$SOURCE_BRANCH" | sed 's/release\///')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          elif [[ "$SOURCE_BRANCH" =~ ^hotfix/ ]]; then
+            echo "branch_type=hotfix" >> $GITHUB_OUTPUT
+            echo "source_branch=$SOURCE_BRANCH" >> $GITHUB_OUTPUT
+            VERSION=$(echo "$SOURCE_BRANCH" | sed 's/hotfix\///')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "branch_type=other" >> $GITHUB_OUTPUT
+            echo "Not a release or hotfix merge - no action needed"
+          fi
+
+      - name: Create version tag
+        if: steps.branch_info.outputs.branch_type != 'other'
+        run: |
+          VERSION="${{ steps.branch_info.outputs.version }}"
+
+          # Ensure version has 'v' prefix for tag
+          if [[ ! "$VERSION" =~ ^v ]]; then
+            TAG="v$VERSION"
+          else
+            TAG="$VERSION"
+          fi
+
+          # Create and push tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "${{ steps.branch_info.outputs.branch_type == 'release' && 'Release' || 'Hotfix' }} $TAG"
+          git push origin "$TAG"
+
+          echo "🟢 Created tag: $TAG"
+
+      - name: Extract changelog for release
+        if: steps.branch_info.outputs.branch_type != 'other'
+        id: changelog
+        uses: release-flow/keep-a-changelog-action@v2
+        with:
+          command: query
+          version: ${{ steps.branch_info.outputs.version }}
+          changelog: CHANGELOG.md
+
+      - name: Create GitHub release
+        if: steps.branch_info.outputs.branch_type != 'other'
+        run: |
+          VERSION="${{ steps.branch_info.outputs.version }}"
+          TAG="v$VERSION"
+          RELEASE_TYPE="${{ steps.branch_info.outputs.branch_type }}"
+
+          # Use changelog content (guaranteed to exist due to PR validation)
+          RELEASE_NOTES="${{ steps.changelog.outputs.release-notes }}"
+
+          if [ "$RELEASE_TYPE" = "release" ]; then
+            TITLE="Release $TAG"
+          else
+            TITLE="Hotfix $TAG"
+          fi
+
+          gh release create "$TAG" \
+            --title "$TITLE" \
+            --notes "$RELEASE_NOTES" \
+            --latest
+
+          echo "🟢 Created GitHub release: $TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge back to develop
+        if: steps.branch_info.outputs.branch_type != 'other'
+        run: |
+          SOURCE_BRANCH="${{ steps.branch_info.outputs.source_branch }}"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch latest changes
+          git fetch origin
+
+          # Check if source branch still exists
+          if git ls-remote --exit-code --heads origin "$SOURCE_BRANCH" >/dev/null 2>&1; then
+            echo "Merging $SOURCE_BRANCH back into develop..."
+
+            # Checkout develop
+            git checkout develop
+            git pull origin develop
+
+            # Merge the source branch
+            git merge "origin/$SOURCE_BRANCH" --no-ff -m "Merge $SOURCE_BRANCH back into develop
+
+          This automated back-merge unlocks the develop branch."
+
+            # Push the merge
+            git push origin develop
+
+            echo "🟢 Successfully merged $SOURCE_BRANCH back into develop"
+          else
+            echo "ℹ️  Source branch $SOURCE_BRANCH no longer exists, merging main into develop instead"
+
+            # Checkout develop
+            git checkout develop
+            git pull origin develop
+
+            # Merge main into develop
+            git merge origin/main --no-ff -m "Merge main into develop after ${{ steps.branch_info.outputs.branch_type }}
+
+          This automated back-merge unlocks the develop branch."
+
+            # Push the merge
+            git push origin develop
+
+            echo "🟢 Successfully merged main into develop"
+          fi
+
+      - name: Cleanup complete
+        if: steps.branch_info.outputs.branch_type != 'other'
+        run: |
+          echo "🔓 Develop branch unlocked (release/hotfix branch will be deleted)"
+          echo "New features can now be merged to develop"
+
+      - name: Cleanup source branch
+        if: steps.branch_info.outputs.branch_type != 'other'
+        run: |
+          SOURCE_BRANCH="${{ steps.branch_info.outputs.source_branch }}"
+
+          # Delete the source branch if it exists
+          if git ls-remote --exit-code --heads origin "$SOURCE_BRANCH" >/dev/null 2>&1; then
+            git push origin --delete "$SOURCE_BRANCH" || true
+            echo "🧹 Cleaned up branch: $SOURCE_BRANCH"
+          fi
+

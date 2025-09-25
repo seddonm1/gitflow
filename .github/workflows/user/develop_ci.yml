@@ -1,0 +1,113 @@
+# Example CI workflow that runs after PR validation on develop
+# Copy to ../ci.yml for your project
+
+name: CI Tests
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number'
+        required: true
+        type: number
+      head_sha:
+        description: 'Head commit SHA'
+        required: true
+        type: string
+
+jobs:
+  ci:
+    name: Run CI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Check out the PR head commit
+          ref: ${{ inputs.head_sha }}
+
+      # REQUIRED: Add your language setup here
+      # Examples:
+      # - name: Setup Python
+      #   uses: actions/setup-python@v4
+      #   with:
+      #     python-version: '3.11'
+      #
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '18'
+      #     cache: 'npm'
+
+      # REQUIRED: Add your dependency installation here
+      # Examples:
+      # - name: Install Python dependencies
+      #   run: |
+      #     pip install uv
+      #     uv sync
+      #
+      # - name: Install Node.js dependencies
+      #   run: npm ci
+
+      # REQUIRED: Add your linting/formatting checks
+      # Examples:
+      # - name: Run linting (Python)
+      #   run: |
+      #     uv run ruff check .
+      #     uv run ruff format --check .
+      #
+      # - name: Run linting (Node.js)
+      #   run: |
+      #     npm run lint
+      #     npm run format:check
+
+      # REQUIRED: Add your type checking
+      # Examples:
+      # - name: Run type checking (Python)
+      #   run: uv run mypy .
+      #
+      # - name: Run type checking (TypeScript)
+      #   run: npm run type-check
+
+      # REQUIRED: Add your test suite
+      # Examples:
+      # - name: Run tests (Python)
+      #   run: uv run pytest --cov
+      #
+      # - name: Run tests (Node.js)
+      #   run: npm test
+
+      # PLACEHOLDER - Replace with your actual CI steps
+      - name: Placeholder CI step
+        run: |
+          echo "🔴 REPLACE THIS WITH YOUR ACTUAL CI STEPS"
+          echo "Add linting, type checking, and tests above"
+          echo "This is just a template - implement your CI pipeline"
+
+  # Optional: Build/compile check
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+
+      # Add your build steps here
+      # Examples:
+      # - name: Build (Node.js)
+      #   run: |
+      #     npm ci
+      #     npm run build
+      #
+      # - name: Build (Python)
+      #   run: |
+      #     pip install uv
+      #     uv sync
+      #     uv run python -m build
+
+      - name: Placeholder build step
+        run: |
+          echo "🔴 ADD YOUR BUILD STEPS HERE IF NEEDED"
+          echo "Remove this job if your project doesn't need building"

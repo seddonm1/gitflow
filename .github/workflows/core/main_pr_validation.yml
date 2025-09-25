@@ -1,0 +1,133 @@
+name: Main PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate_pr:
+    name: Validate PR to Main
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      is_hotfix: ${{ steps.check.outputs.is_hotfix }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check PR source branch
+        id: check
+        run: |
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          echo "Source branch: $SOURCE_BRANCH"
+
+          if [[ "$SOURCE_BRANCH" =~ ^release/ ]]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "is_hotfix=false" >> $GITHUB_OUTPUT
+            VERSION=$(echo "$SOURCE_BRANCH" | sed 's/release\///')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "🟢 Valid release PR: $SOURCE_BRANCH -> main"
+          elif [[ "$SOURCE_BRANCH" =~ ^hotfix/ ]]; then
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "is_hotfix=true" >> $GITHUB_OUTPUT
+            VERSION=$(echo "$SOURCE_BRANCH" | sed 's/hotfix\///')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "🟢 Valid hotfix PR: $SOURCE_BRANCH -> main"
+          else
+            echo "🔴 Invalid PR to main branch"
+            echo "PRs to main must be from release/* or hotfix/* branches"
+            echo "Current branch: $SOURCE_BRANCH"
+
+            gh pr comment ${{ github.event.pull_request.number }} --body "## 🔴 Invalid PR to Main
+
+          PRs to the \`main\` branch must be created using the **Create Release** or **Create Hotfix** workflows.
+
+          **Current branch:** \`$SOURCE_BRANCH\`
+
+          ### How to create valid PRs to main:
+
+          **For Releases:**
+          1. Go to Actions → \"Create Release\"
+          2. Run from the \`develop\` branch
+          3. This automatically creates a \`release/*\` branch and PR to main
+
+          **For Hotfixes:**
+          1. Go to Actions → \"Create Hotfix\"
+          2. Run from the \`main\` branch
+          3. This automatically creates a \`hotfix/*\` branch and PR to main
+
+          ### Why this is required:
+          The gitflow automation handles version bumping, branch creation, and proper PR formatting. Manual PRs to main bypass these important steps and can break the release process.
+
+          Please close this PR and use the appropriate workflow instead."
+
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify changelog exists and has version entry
+        run: |
+          if [ ! -f "CHANGELOG.md" ]; then
+            echo "🔴 CHANGELOG.md not found"
+
+            gh pr comment ${{ github.event.pull_request.number }} --body "## 🔴 Missing CHANGELOG.md
+
+          This repository requires a \`CHANGELOG.md\` file following the [Keep a Changelog](https://keepachangelog.com/) format.
+
+          **Why this is required:**
+          - Release notes are automatically generated from the changelog
+          - The version ${{ needs.validate_pr.outputs.version }} must have an entry in the changelog
+
+          **How to fix:**
+          1. Create a \`CHANGELOG.md\` file in the repository root
+          2. Add an entry for version ${{ needs.validate_pr.outputs.version }}
+          3. Follow the [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format"
+
+            exit 1
+          fi
+
+          # Check if the specific version exists in changelog
+          VERSION="${{ needs.validate_pr.outputs.version }}"
+          if grep -q "## \[$VERSION\]" CHANGELOG.md; then
+            echo "🟢 CHANGELOG.md contains entry for version $VERSION"
+          else
+            echo "🔴 CHANGELOG.md missing entry for version $VERSION"
+
+            gh pr comment ${{ github.event.pull_request.number }} --body "## 🔴 Missing Changelog Entry
+
+          The changelog is missing an entry for version **$VERSION**.
+
+          **Required format in CHANGELOG.md:**
+          \`\`\`markdown
+          ## [$VERSION] - $(date +%Y-%m-%d)
+
+          ### Added
+          - New features
+
+          ### Changed
+          - Modifications
+
+          ### Fixed
+          - Bug fixes
+          \`\`\`
+
+          **Why this is required:**
+          - GitHub releases use changelog content automatically
+          - Ensures proper documentation of changes
+          - Required for release automation"
+
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        needs: validate_pr
+
+  run_release_ci:
+    name: Run Release CI
+    needs: validate_pr
+    if: needs.validate_pr.result == 'success' && (needs.validate_pr.outputs.is_release == 'true' || needs.validate_pr.outputs.is_hotfix == 'true')
+    uses: ./.github/workflows/user/release_ci.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      version: ${{ needs.validate_pr.outputs.version }}
